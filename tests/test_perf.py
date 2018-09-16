@@ -40,7 +40,9 @@ def test_perf_cartpole(model_class):
     :param model_class: (BaseRLModel) A model
     """
 
-    model = model_class(policy="MlpPolicy", env='CartPole-v1', tensorboard_log="/tmp/log/perf/")
+    # TODO: multiprocess if possible
+    model = model_class(policy="MlpPolicy", env='CartPole-v1',
+                        tensorboard_log="/tmp/log/perf/cartpole")
     model.learn(total_timesteps=100000, seed=0)
 
     env = DummyVecEnv([lambda: gym.make('CartPole-v1')])
@@ -72,7 +74,8 @@ def test_perf_marslander(model_class):
     :param model_class: (BaseRLModel) A model
     """
 
-    model = model_class(policy="MlpPolicy", env='LunarLanderContinuous-v2', tensorboard_log="/tmp/log/perf/mars/")
+    model = model_class(policy="MlpPolicy", env='LunarLanderContinuous-v2',
+                        tensorboard_log="/tmp/log/perf/mars/")
     model.learn(total_timesteps=200000, seed=0)
 
     env = DummyVecEnv([lambda: gym.make('LunarLanderContinuous-v2')])
