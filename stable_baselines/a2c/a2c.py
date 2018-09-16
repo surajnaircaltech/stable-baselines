@@ -36,7 +36,7 @@ class A2C(BaseRLModel):
     """
 
     def __init__(self, policy, env, gamma=0.99, n_steps=5, vf_coef=0.25, ent_coef=0.01, max_grad_norm=0.5,
-                 learning_rate=7e-4, alpha=0.99, epsilon=1e-5, lr_schedule='linear', verbose=0, tensorboard_log=None,
+                 learning_rate=7e-4, alpha=0.99, epsilon=1e-5, lr_schedule='constant', verbose=0, tensorboard_log=None,
                  _init_setup_model=True):
 
         super(A2C, self).__init__(policy=policy, env=env, verbose=verbose, policy_base=ActorCriticPolicy,
