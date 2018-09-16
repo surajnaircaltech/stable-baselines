@@ -3,6 +3,7 @@ import pytest
 
 def pytest_addoption(parser):
     parser.addoption("--rungpu", action="store_true", default=False, help="run gpu tests")
+    parser.addoption("--perf-tests", action="store_true", default=False, help="run performance tests")
 
 
 def pytest_collection_modifyitems(config, items):
