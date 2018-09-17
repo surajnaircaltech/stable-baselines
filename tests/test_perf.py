@@ -1,30 +1,33 @@
 import pytest
 import numpy as np
-import gym
 
-from stable_baselines import A2C, ACER, ACKTR, DeepQ, DDPG, PPO1, PPO2, TRPO
+from stable_baselines import A2C, ACER, ACKTR, DQN, DDPG, PPO1, PPO2, TRPO
+from stable_baselines.ddpg import AdaptiveParamNoiseSpec
 from stable_baselines.common import set_global_seeds
-from stable_baselines.common.vec_env import DummyVecEnv
 
 MODEL_LIST_DISCRETE = [
     A2C,
     ACER,
     ACKTR,
-    DeepQ,
+    DQN,
     PPO1,
     PPO2,
     TRPO
 ]
 
-MODEL_LIST_CONTINUOUS = [
-    A2C,
-    # ACER,
-    # ACKTR,
-    DDPG,
-    PPO1,
-    PPO2,
-    TRPO
-]
+PARAM_NOISE_DDPG = AdaptiveParamNoiseSpec(initial_stddev=float(0.2), desired_action_stddev=float(0.2))
+LOG_DIR_CONTINUOUS = "/tmp/log/perf/mountain/"
+
+# Hyperparameters for learning MountainCarContinuous for each RL model
+LEARN_FUNC_DICT = {
+    'a2c': lambda e: A2C(policy="MlpPolicy", env=e, tensorboard_log=LOG_DIR_CONTINUOUS),
+    'ddpg': lambda e: DDPG(policy="MlpPolicy", env=e,
+                           param_noise=PARAM_NOISE_DDPG, tensorboard_log=LOG_DIR_CONTINUOUS),
+    'ppo1': lambda e: PPO1(policy="MlpPolicy", env=e, tensorboard_log=LOG_DIR_CONTINUOUS),
+    'ppo2': lambda e: PPO2(policy="MlpPolicy", env=e, tensorboard_log=LOG_DIR_CONTINUOUS),
+    'trpo': lambda e: TRPO(policy="MlpPolicy", env=e, tensorboard_log=LOG_DIR_CONTINUOUS),
+}
+
 
 
 if not pytest.config.getoption("--perf-tests"):
@@ -43,10 +46,9 @@ def test_perf_cartpole(model_class):
     # TODO: multiprocess if possible
     model = model_class(policy="MlpPolicy", env='CartPole-v1',
                         tensorboard_log="/tmp/log/perf/cartpole")
-    model.learn(total_timesteps=100000, seed=0)
+    model.learn(total_timesteps=int(1e5), seed=0)
 
-    env = DummyVecEnv([lambda: gym.make('CartPole-v1')])
-    # env = model.env
+    env = model.get_env()
     n_trials = 2000
     set_global_seeds(0)
     obs = env.reset()
@@ -65,21 +67,19 @@ def test_perf_cartpole(model_class):
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("model_class", MODEL_LIST_CONTINUOUS)
-def test_perf_marslander(model_class):
+@pytest.mark.parametrize("model_name", ['a2c', 'ddpg', 'ppo1', 'ppo2', 'trpo'])
+def test_perf_mountain(model_name):
     """
     Test if the algorithm (with a given policy)
-    can learn something on the LunarLanderContinuous-v2 environment
+    can learn something on the MountainCarContinuous-v0 environment
 
-    :param model_class: (BaseRLModel) A model
+    :param model_name: (str) Name of the RL model
     """
+    # TODO: tune Hyperparameters, so each algo can pass this test
+    model = LEARN_FUNC_DICT[model_name]('MountainCarContinuous-v0')
+    model.learn(total_timesteps=int(2e5), seed=0)
 
-    model = model_class(policy="MlpPolicy", env='LunarLanderContinuous-v2',
-                        tensorboard_log="/tmp/log/perf/mars/")
-    model.learn(total_timesteps=200000, seed=0)
-
-    env = DummyVecEnv([lambda: gym.make('LunarLanderContinuous-v2')])
-    # env = model.env
+    env = model.get_env()
     n_trials = 2000
     set_global_seeds(0)
     obs = env.reset()
@@ -92,6 +92,6 @@ def test_perf_marslander(model_class):
         if done:
             episode_rewards.append(reward_sum)
             reward_sum = 0
-    assert np.mean(episode_rewards) >= -200
+    assert np.mean(episode_rewards) >= 0
     # Free memory
     del model, env
