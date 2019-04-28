@@ -185,10 +185,10 @@ class PPO2(ActorCriticRLModel):
                     tf.summary.histogram('old_neglog_action_probabilty', self.old_neglog_pac_ph)
                     tf.summary.scalar('old_value_pred', tf.reduce_mean(self.old_vpred_ph))
                     tf.summary.histogram('old_value_pred', self.old_vpred_ph)
-                    if len(self.observation_space.shape) == 3:
-                        tf.summary.image('observation', train_model.obs_ph)
-                    else:
-                        tf.summary.histogram('observation', train_model.obs_ph)
+#                     if len(self.observation_space.shape) == 3:
+#                         tf.summary.image('observation', train_model.obs_ph)
+#                     else:
+#                         tf.summary.histogram('observation', train_model.obs_ph)
 
                 self.train_model = train_model
                 self.act_model = act_model
@@ -235,7 +235,7 @@ class PPO2(ActorCriticRLModel):
 
         if writer is not None:
             # run loss backprop with summary, but once every 10 runs save the metadata (memory, compute time, ...)
-            if (1 + update) % 10 == 0:
+            if ((1 + update) % 10 == 0):
                 run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
                 run_metadata = tf.RunMetadata()
                 summary, policy_loss, value_loss, policy_entropy, approxkl, clipfrac, _ = self.sess.run(

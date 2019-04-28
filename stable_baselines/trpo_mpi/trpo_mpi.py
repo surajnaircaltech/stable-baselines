@@ -226,10 +226,10 @@ class TRPO(ActorCriticRLModel):
                     tf.summary.histogram('advantage', atarg)
                     tf.summary.scalar('kl_clip_range', tf.reduce_mean(self.max_kl))
                     tf.summary.histogram('kl_clip_range', self.max_kl)
-                    if len(self.observation_space.shape) == 3:
-                        tf.summary.image('observation', observation)
-                    else:
-                        tf.summary.histogram('observation', observation)
+#                     if len(self.observation_space.shape) == 3:
+#                         tf.summary.image('observation', observation)
+#                     else:
+#                         tf.summary.histogram('observation', observation)
 
                 self.timed = timed
                 self.allmean = allmean

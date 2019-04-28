@@ -4,7 +4,7 @@ from stable_baselines.ppo1 import PPO1
 from stable_baselines.common.policies import MlpPolicy
 from stable_baselines.common.cmd_util import make_mujoco_env, mujoco_arg_parser
 from stable_baselines import logger
-
+import numpy as np
 
 def train(env_id, num_timesteps, seed):
     """
@@ -16,7 +16,7 @@ def train(env_id, num_timesteps, seed):
     """
     env = make_mujoco_env(env_id, seed)
     model = PPO1(MlpPolicy, env, timesteps_per_actorbatch=2048, clip_param=0.2, entcoeff=0.0, optim_epochs=10,
-                 optim_stepsize=3e-4, optim_batchsize=64, gamma=0.99, lam=0.95, schedule='linear')
+                 optim_stepsize=3e-4, optim_batchsize=64, gamma=0.99, lam=0.95, schedule='linear', verbose=1)
     model.learn(total_timesteps=num_timesteps)
     env.close()
 
@@ -28,6 +28,16 @@ def main():
     args = mujoco_arg_parser().parse_args()
     logger.configure()
     train(args.env, num_timesteps=args.num_timesteps, seed=args.seed)
+
+    if args.play:
+        logger.log("Running trained model")
+        obs = np.zeros((env.num_envs,) + env.observation_space.shape)
+        obs[:] = env.reset()
+        while True:
+            actions = model.step(obs)[0]
+            obs[:] = env.step(actions)[0]
+            env.render()
+
 
 
 if __name__ == '__main__':

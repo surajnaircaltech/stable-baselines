@@ -26,9 +26,10 @@ def train(env_id, num_timesteps, seed):
             logger.set_level(logger.DISABLED)
         workerseed = seed + 10000 * MPI.COMM_WORLD.Get_rank()
 
+        tblog = "/cvgl2/u/surajn/workspace/tb_logs/reacher/"
         env = make_mujoco_env(env_id, workerseed)
         model = TRPO(MlpPolicy, env, timesteps_per_batch=1024, max_kl=0.01, cg_iters=10, cg_damping=0.1, entcoeff=0.0,
-                     gamma=0.99, lam=0.98, vf_iters=5, vf_stepsize=1e-3)
+                     gamma=0.99, lam=0.98, vf_iters=5, vf_stepsize=1e-3, tensorboard_log)
         model.learn(total_timesteps=num_timesteps)
         env.close()
 
@@ -38,7 +39,16 @@ def main():
     Runs the test
     """
     args = mujoco_arg_parser().parse_args()
-    train(args.env, num_timesteps=args.num_timesteps, seed=args.seed)
+    model, env = train(args.env, num_timesteps=args.num_timesteps, seed=args.seed)
+
+    if args.play:
+        logger.log("Running trained model")
+        obs = np.zeros((env.num_envs,) + env.observation_space.shape)
+        obs[:] = env.reset()
+        while True:
+            actions = model.step(obs)[0]
+            obs[:] = env.step(actions)[0]
+            env.render()
 
 
 if __name__ == '__main__':

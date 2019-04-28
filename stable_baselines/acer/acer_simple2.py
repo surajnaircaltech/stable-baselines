@@ -188,6 +188,15 @@ class ACER(ActorCriticRLModel):
                                        custom_getter=tf_util.outer_scope_getter("train_model")):
                     train_model = self.policy(self.sess, self.observation_space, self.action_space, self.n_envs,
                                               self.n_steps + 1, n_batch_train, reuse=True)
+                    
+#                 with tf.variable_scope("temporal_diff", reuse=True,
+#                                        custom_getter=tf_util.outer_scope_getter("temporal_diff")):
+#                     siz = tuple(list(self.observation_space.sample().shape) + [2])
+#                     obs_sp = Box(0, 255, siz)
+# #                     print(self.action_space)
+# #                     assert(False)
+#                     temp_model = self.policy(self.sess, obs_sp, Box(0, 1000, (1,)), self.n_envs,
+#                                               self.n_steps + 1, n_batch_train, reuse=True)
 
                 with tf.variable_scope("moving_average"):
                     # create averaged model
@@ -366,10 +375,10 @@ class ACER(ActorCriticRLModel):
                     tf.summary.histogram('advantage', adv)
                     tf.summary.scalar('action_probabilty', tf.reduce_mean(self.mu_ph))
                     tf.summary.histogram('action_probabilty', self.mu_ph)
-#                     if len(self.observation_space.shape) == 3:
-#                         tf.summary.image('observation', train_model.obs_ph)
-#                     else:
-#                         tf.summary.histogram('observation', train_model.obs_ph)
+                    if len(self.observation_space.shape) == 3:
+                        tf.summary.image('observation', train_model.obs_ph)
+                    else:
+                        tf.summary.histogram('observation', train_model.obs_ph)
 
                 trainer = tf.train.RMSPropOptimizer(learning_rate=self.learning_rate_ph, decay=self.rprop_alpha,
                                                     epsilon=self.rprop_epsilon)

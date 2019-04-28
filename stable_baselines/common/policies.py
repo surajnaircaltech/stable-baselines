@@ -223,6 +223,80 @@ class LstmPolicy(ActorCriticPolicy):
 
     def value(self, obs, state=None, mask=None):
         return self.sess.run(self._value, {self.obs_ph: obs, self.states_ph: state, self.masks_ph: mask})
+    
+class LstmPolicyCustomTConv(ActorCriticPolicy):
+    """
+    Policy object that implements actor critic, using LSTMs.
+
+    :param sess: (TensorFlow session) The current TensorFlow session
+    :param ob_space: (Gym Space) The observation space of the environment
+    :param ac_space: (Gym Space) The action space of the environment
+    :param n_env: (int) The number of environments to run
+    :param n_steps: (int) The number of steps to run for each environment
+    :param n_batch: (int) The number of batch to run (n_envs * n_steps)
+    :param n_lstm: (int) The number of LSTM cells (for recurrent policies)
+    :param reuse: (bool) If the policy is reusable or not
+    :param layers: ([int]) The size of the Neural network before the LSTM layer  (if None, default to [64, 64])
+    :param cnn_extractor: (function (TensorFlow Tensor, ``**kwargs``): (TensorFlow Tensor)) the CNN feature extraction
+    :param layer_norm: (bool) Whether or not to use layer normalizing LSTMs
+    :param feature_extraction: (str) The feature extraction type ("cnn" or "mlp")
+    :param kwargs: (dict) Extra keyword arguments for the nature CNN feature extraction
+    """
+
+    def __init__(self, sess, ob_space, ac_space, n_env, n_steps, n_batch, n_lstm=256, reuse=False, layers=None,
+                 cnn_extractor=nature_cnn, layer_norm=False, feature_extraction="cnn", horizon=None, num=None, structure=None, **kwargs):
+        super(LstmPolicyCustomTConv, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, n_lstm, reuse,
+                                         scale=(feature_extraction == "cnn"))
+        
+        print(num, horizon, structure)
+        
+
+        if layers is None:
+            layers = [64, 64]
+
+        with tf.variable_scope("model", reuse=reuse):
+            if feature_extraction == "cnn":
+                extracted_features = cnn_extractor(self.processed_x, **kwargs)
+            else:
+                activ = tf.tanh
+                print(self.processed_x)
+                state = self.processed_x[:,:5]
+                goal = self.processed_x[:,5:10]
+                
+#                 x = tf.reshape(self.processed_x, (None, ))
+#                 print(x)
+                assert(False)
+                extracted_features = tf.layers.flatten(self.processed_x)
+                for i, layer_size in enumerate(layers):
+                    extracted_features = activ(linear(extracted_features, 'pi_fc' + str(i), n_hidden=layer_size,
+                                                      init_scale=np.sqrt(2)))
+            input_sequence = batch_to_seq(extracted_features, self.n_env, n_steps)
+            masks = batch_to_seq(self.masks_ph, self.n_env, n_steps)
+            rnn_output, self.snew = lstm(input_sequence, masks, self.states_ph, 'lstm1', n_hidden=n_lstm,
+                                         layer_norm=layer_norm)
+            rnn_output = seq_to_batch(rnn_output)
+            value_fn = linear(rnn_output, 'vf', 1)
+
+            self.proba_distribution, self.policy, self.q_value = \
+                self.pdtype.proba_distribution_from_latent(rnn_output, rnn_output)
+
+        self.value_fn = value_fn
+        self.initial_state = np.zeros((self.n_env, n_lstm * 2), dtype=np.float32)
+        self._setup_init()
+
+    def step(self, obs, state=None, mask=None, deterministic=False):
+        if deterministic:
+            return self.sess.run([self.deterministic_action, self._value, self.snew, self.neglogp],
+                                 {self.obs_ph: obs, self.states_ph: state, self.masks_ph: mask})
+        else:
+            return self.sess.run([self.action, self._value, self.snew, self.neglogp],
+                                 {self.obs_ph: obs, self.states_ph: state, self.masks_ph: mask})
+
+    def proba_step(self, obs, state=None, mask=None):
+        return self.sess.run(self.policy_proba, {self.obs_ph: obs, self.states_ph: state, self.masks_ph: mask})
+
+    def value(self, obs, state=None, mask=None):
+        return self.sess.run(self._value, {self.obs_ph: obs, self.states_ph: state, self.masks_ph: mask})
 
 
 class FeedForwardPolicy(ActorCriticPolicy):
@@ -367,6 +441,27 @@ class MlpPolicy(FeedForwardPolicy):
         super(MlpPolicy, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, reuse,
                                         feature_extraction="mlp", **_kwargs)
 
+        
+class MlpLstmPolicyCustomTConv(LstmPolicyCustomTConv):
+    """
+    Policy object that implements actor critic, using LSTMs with a MLP feature extraction
+
+    :param sess: (TensorFlow session) The current TensorFlow session
+    :param ob_space: (Gym Space) The observation space of the environment
+    :param ac_space: (Gym Space) The action space of the environment
+    :param n_env: (int) The number of environments to run
+    :param n_steps: (int) The number of steps to run for each environment
+    :param n_batch: (int) The number of batch to run (n_envs * n_steps)
+    :param n_lstm: (int) The number of LSTM cells (for recurrent policies)
+    :param reuse: (bool) If the policy is reusable or not
+    :param kwargs: (dict) Extra keyword arguments for the nature CNN feature extraction
+    """
+    
+    def __init__(self, sess, ob_space, ac_space, n_env, n_steps, n_batch, n_lstm=256, reuse=False, horizon=None, num=None, structure=None, **_kwargs):
+        print(horizon, num, structure, **_kwargs)
+        assert(False)
+        super(MlpLstmPolicyCustomTConv, self).__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, n_lstm, reuse,
+                                            layer_norm=False, feature_extraction="mlp", horizon=None, num=None, structure=None, **_kwargs)
 
 class MlpLstmPolicy(LstmPolicy):
     """

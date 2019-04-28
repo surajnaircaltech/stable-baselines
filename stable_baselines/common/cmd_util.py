@@ -71,7 +71,9 @@ def make_robotics_env(env_id, seed, rank=0, allow_early_resets=True):
     """
     set_global_seeds(seed)
     env = gym.make(env_id)
+    print(env.observation_space)
     env = FlattenDictWrapper(env, ['observation', 'desired_goal'])
+    print(env.observation_space)
     env = Monitor(
         env, logger.get_dir() and os.path.join(logger.get_dir(), str(rank)),
         info_keywords=('is_success',), allow_early_resets=allow_early_resets)

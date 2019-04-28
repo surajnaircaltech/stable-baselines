@@ -135,10 +135,10 @@ class A2C(ActorCriticRLModel):
                     tf.summary.histogram('learning_rate', self.learning_rate)
                     tf.summary.scalar('advantage', tf.reduce_mean(self.advs_ph))
                     tf.summary.histogram('advantage', self.advs_ph)
-                    if len(self.observation_space.shape) == 3:
-                        tf.summary.image('observation', train_model.obs_ph)
-                    else:
-                        tf.summary.histogram('observation', train_model.obs_ph)
+#                     if len(self.observation_space.shape) == 3:
+#                         tf.summary.image('observation', train_model.obs_ph)
+#                     else:
+#                         tf.summary.histogram('observation', train_model.obs_ph)
 
                 trainer = tf.train.RMSPropOptimizer(learning_rate=self.learning_rate_ph, decay=self.alpha,
                                                     epsilon=self.epsilon)
