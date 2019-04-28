@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
+import warnings
 
-from stable_baselines import logger
-from stable_baselines.acer import ACER
+from stable_baselines import logger, ACER
 from stable_baselines.common.policies import CnnPolicy, CnnLstmPolicy
 from stable_baselines.common.cmd_util import make_atari_env, atari_arg_parser
+from stable_baselines.common.vec_env import VecFrameStack
 
 
 def train(env_id, num_timesteps, seed, policy, lr_schedule, num_cpu):
@@ -18,18 +19,20 @@ def train(env_id, num_timesteps, seed, policy, lr_schedule, num_cpu):
                                  'double_linear_con', 'middle_drop' or 'double_middle_drop')
     :param num_cpu: (int) The number of cpu to train on
     """
-    env = make_atari_env(env_id, num_cpu, seed)
+    env = VecFrameStack(make_atari_env(env_id, num_cpu, seed), 4)
     if policy == 'cnn':
         policy_fn = CnnPolicy
     elif policy == 'lstm':
         policy_fn = CnnLstmPolicy
     else:
-        print("Policy {} not implemented".format(policy))
+        warnings.warn("Policy {} not implemented".format(policy))
         return
 
     model = ACER(policy_fn, env, lr_schedule=lr_schedule, buffer_size=5000)
     model.learn(total_timesteps=int(num_timesteps * 1.1), seed=seed)
     env.close()
+    # Free memory
+    del model
 
 
 def main():

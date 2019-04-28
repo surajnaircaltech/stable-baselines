@@ -33,7 +33,7 @@ MOCK_MODULES = ['joblib', 'scipy', 'scipy.signal',
                 'tensorflow.python', 'tensorflow.python.client', 'tensorflow.python.ops',
                 'tqdm', 'cloudpickle', 'matplotlib', 'matplotlib.pyplot',
                 'seaborn', 'gym', 'gym.spaces', 'gym.core',
-                'gym.wrappers', 'zmq']
+                'gym.wrappers', 'gym.wrappers.monitoring', 'zmq']
 sys.modules.update((mod_name, Mock()) for mod_name in MOCK_MODULES)
 
 import stable_baselines
@@ -42,7 +42,7 @@ import stable_baselines
 # -- Project information -----------------------------------------------------
 
 project = 'Stable Baselines'
-copyright = '2018, Stable Baselines'
+copyright = '2018-2019, Stable Baselines'
 author = 'Stable Baselines Contributors'
 
 # The short X.Y version

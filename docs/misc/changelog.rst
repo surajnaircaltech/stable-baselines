@@ -5,13 +5,144 @@ Changelog
 
 For download links, please look at `Github release page <https://github.com/hill-a/stable-baselines/releases>`_.
 
-Pre Release 2.0.1.a0 (WIP)
----------------------------
+Pre-Release 2.5.1a0 (WIP)
+--------------------------
 
-**logging and bug fixes**
+- doc update (fix example of result plotter + improve doc)
+- fixed logger issues when stdout lacks ``read`` function
+- fixed a bug in ``common.dataset.Dataset`` where shuffling was not disabled properly (it affects only PPO1 with recurrent policies)
+- fixed output layer name for DDPG q function, used in pop-art normalization and l2 regularization of the critic
+- added support for multi env recording to ``generate_expert_traj`` (@XMaster96)
+- added support for LSTM model recording to ``generate_expert_traj`` (@XMaster96)
+- ``GAIL``: remove mandatory matplotlib dependency and refactor as subclass of ``TRPO`` (@kantneel and @AdamGleave)
+- added ``get_attr()``, ``env_method()`` and ``set_attr()`` methods for all VecEnv. 
+  Those methods now all accept ``indices`` keyword to select a subset of envs.
+  ``set_attr`` now returns ``None`` rather than a list of ``None``. (@kantneel)
+- ``GAIL``: ``gail.dataset.ExpertDataset` supports loading from memory rather than file, and
+  ``gail.dataset.record_expert`` supports returning in-memory rather than saving to file.
+- fixed bug where result plotter would crash on very short runs (@Pastafarianist)
+- added option to not trim output of result plotter by number of timesteps (@Pastafarianist)
+
+
+Release 2.5.0 (2019-03-28)
+--------------------------
+
+**Working GAIL, pretrain RL models and hotfix for A2C with continuous actions**
+
+- fixed various bugs in GAIL
+- added scripts to generate dataset for gail
+- added tests for GAIL + data for Pendulum-v0
+- removed unused ``utils`` file in DQN folder
+- fixed a bug in A2C where actions were cast to ``int32`` even in the continuous case
+- added addional logging to A2C when Monitor wrapper is used
+- changed logging for PPO2: do not display NaN when reward info is not present
+- change default value of A2C lr schedule
+- removed behavior cloning script
+- added ``pretrain`` method to base class, in order to use behavior cloning on all models
+- fixed ``close()`` method for DummyVecEnv.
+- added support for Dict spaces in DummyVecEnv and SubprocVecEnv. (@AdamGleave)
+- added support for arbitrary multiprocessing start methods and added a warning about SubprocVecEnv that are not thread-safe by default.  (@AdamGleave)
+- added support for Discrete actions for GAIL
+- fixed deprecation warning for tf: replaces ``tf.to_float()`` by ``tf.cast()``
+- fixed bug in saving and loading ddpg model when using normalization of obs or returns (@tperol)
+- changed DDPG default buffer size from 100 to 50000.
+- fixed a bug in ``ddpg.py`` in ``combined_stats`` for eval. Computed mean on ``eval_episode_rewards`` and ``eval_qs`` (@keshaviyengar)
+- fixed a bug in ``setup.py`` that would error on non-GPU systems without TensorFlow installed
+
+
+Release 2.4.1 (2019-02-11)
+--------------------------
+
+**Bug fixes and improvements**
+
+- fixed computation of training metrics in TRPO and PPO1
+- added ``reset_num_timesteps`` keyword when calling train() to continue tensorboard learning curves
+- reduced the size taken by tensorboard logs (added a ``full_tensorboard_log`` to enable full logging, which was the previous behavior)
+- fixed image detection for tensorboard logging
+- fixed ACKTR for recurrent policies
+- fixed gym breaking changes
+- fixed custom policy examples in the doc for DQN and DDPG
+- remove gym spaces patch for equality functions
+- fixed tensorflow dependency: cpu version was installed overwritting tensorflow-gpu when present.
+- fixed a bug in ``traj_segment_generator`` (used in ppo1 and trpo) where ``new`` was not updated. (spotted by @junhyeokahn)
+
+
+Release 2.4.0 (2019-01-17)
+--------------------------
+
+**Soft Actor-Critic (SAC) and policy kwargs**
+
+- added Soft Actor-Critic (SAC) model
+- fixed a bug in DQN where prioritized_replay_beta_iters param was not used
+- fixed DDPG that did not save target network parameters
+- fixed bug related to shape of true_reward (@abhiskk)
+- fixed example code in documentation of tf_util:Function (@JohannesAck)
+- added learning rate schedule for SAC
+- fixed action probability for continuous actions with actor-critic models
+- added optional parameter to action_probability for likelihood calculation of given action being taken.
+- added more flexible custom LSTM policies
+- added auto entropy coefficient optimization for SAC
+- clip continuous actions at test time too for all algorithms (except SAC/DDPG where it is not needed)
+- added a mean to pass kwargs to policy when creating a model (+ save those kwargs)
+- fixed DQN examples in DQN folder
+- added possibility to pass activation function for DDPG, DQN and SAC
+
+
+Release 2.3.0 (2018-12-05)
+--------------------------
+
+- added support for storing model in file like object. (thanks to @erniejunior)
+- fixed wrong image detection when using tensorboard logging with DQN
+- fixed bug in ppo2 when passing non callable lr after loading
+- fixed tensorboard logging in ppo2 when nminibatches=1
+- added early stoppping via callback return value (@erniejunior)
+- added more flexible custom mlp policies (@erniejunior)
+
+
+Release 2.2.1 (2018-11-18)
+--------------------------
+
+- added VecVideoRecorder to record mp4 videos from environment.
+
+
+Release 2.2.0 (2018-11-07)
+--------------------------
+
+- Hotfix for ppo2, the wrong placeholder was used for the value function
+
+
+Release 2.1.2 (2018-11-06)
+--------------------------
+
+- added ``async_eigen_decomp`` parameter for ACKTR and set it to ``False`` by default (remove deprecation warnings)
+- added methods for calling env methods/setting attributes inside a VecEnv (thanks to @bjmuld)
+- updated gym minimum version
+
+
+Release 2.1.1 (2018-10-20)
+--------------------------
+
+- fixed MpiAdam synchronization issue in PPO1 (thanks to @brendenpetersen) issue #50
+- fixed dependency issues (new mujoco-py requires a mujoco licence + gym broke MultiDiscrete space shape)
+
+
+Release 2.1.0 (2018-10-2)
+-------------------------
+
+.. warning::
+
+	This version contains breaking changes for DQN policies, please read the full details
+
+**Bug fixes + doc update**
+
 
 - added patch fix for equal function using `gym.spaces.MultiDiscrete` and `gym.spaces.MultiBinary`
-
+- fixes for DQN action_probability
+- re-added double DQN + refactored DQN policies **breaking changes**
+- replaced `async` with `async_eigen_decomp` in ACKTR/KFAC for python 3.7 compatibility
+- removed action clipping for prediction of continuous actions (see issue #36)
+- fixed NaN issue due to clipping the continuous action in the wrong place (issue #36)
+- documentation was updated (policy + DDPG example hyperparameters)
 
 Release 2.0.0 (2018-09-18)
 --------------------------
@@ -132,5 +263,25 @@ Release 0.1.6 (2018-07-27)
 -  Added atari tests
 -  Added logger tests
 
-Missing: tests for acktr continuous (+ HER, gail but they rely on
-mujoco...)
+Missing: tests for acktr continuous (+ HER, rely on mujoco...)
+
+Maintainers
+-----------
+
+Stable-Baselines is currently maintained by `Ashley Hill`_ (aka @hill-a), `Antonin Raffin`_ (aka `@araffin`_),
+`Maximilian Ernestus`_ (aka @erniejunior) and `Adam Gleave`_ (`@AdamGleave`_).
+
+.. _Ashley Hill: https://github.com/hill-a
+.. _Antonin Raffin: https://araffin.github.io/
+.. _Maximilian Ernestus: https://github.com/erniejunior
+.. _Adam Gleave: https://gleave.me/
+.. _@araffin: https://github.com/araffin
+.. _@AdamGleave: https://github.com/adamgleave
+
+Contributors (since v2.0.0):
+----------------------------
+In random order...
+
+Thanks to @bjmuld @iambenzo @iandanforth @r7vme @brendenpetersen @huvar @abhiskk @JohannesAck
+@EliasHasle @mrakgr @Bleyddyn @antoine-galataud @junhyeokahn @AdamGleave @keshaviyengar @tperol
+@XMaster96 @kantneel @Pastafarianist

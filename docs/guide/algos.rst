@@ -22,12 +22,13 @@ Name         Refactored [#f1]_        Recurrent ``Box``     ``Discrete`` Multi P
 A2C          ✔️                        ✔️         ✔️           ✔️            ✔️
 ACER         ✔️                        ✔️         ❌ [#f5]_   ✔️            ✔️
 ACKTR        ✔️                        ✔️         ❌ [#f5]_   ✔️            ✔️
-DDPG         ✔️                        ✔️         ✔️           ❌           ❌
-DQN          ✔️                        ❌        ❌           ✔️            ❌
+DDPG         ✔️                        ❌        ✔️           ❌           ❌
+DQN          ✔️                        ❌        ❌          ✔️            ❌
 GAIL [#f2]_  ✔️                        ✔️         ✔️           ✔️            ✔️ [#f4]_
-PPO1         ✔️                        ✔️         ✔️           ✔️            ✔️ [#f4]_
+PPO1         ✔️                        ❌        ✔️           ✔️            ✔️ [#f4]_
 PPO2         ✔️                        ✔️         ✔️           ✔️            ✔️
-TRPO         ✔️                        ✔️         ✔️           ✔️            ✔️ [#f4]_
+SAC          ✔️                        ❌        ✔️           ❌           ❌
+TRPO         ✔️                        ❌        ✔️           ✔️            ✔️ [#f4]_
 ============ ======================== ========= =========== ============ ================
 
 .. [#f1] Whether or not the algorithm has be refactored to fit the ``BaseRLModel`` class.
@@ -36,6 +37,8 @@ TRPO         ✔️                        ✔️         ✔️           ✔�
 .. [#f4] Multi Processing with `MPI`_.
 .. [#f5] TODO, in project scope.
 
+.. note::
+    Non-array spaces such as `Dict` or `Tuple` are not currently supported by any algorithm.
 
 Actions ``gym.spaces``:
 

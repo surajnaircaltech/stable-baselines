@@ -8,7 +8,7 @@ from stable_baselines.common.vec_env.dummy_vec_env import DummyVecEnv
 from stable_baselines.common.vec_env.vec_normalize import VecNormalize
 from .test_common import _assert_eq
 
-ENV_ID = 'BreakoutNoFrameskip-v4'
+ENV_ID = 'Pendulum-v0'
 
 
 def test_runningmeanstd():
@@ -56,4 +56,5 @@ def test_mpi_moments():
     test running mean std function
     """
     subprocess.check_call(['mpirun', '--allow-run-as-root', '-np', '3', 'python', '-c',
-                           'from stable_baselines.common.mpi_moments import _helper_runningmeanstd; _helper_runningmeanstd()'])
+                           'from stable_baselines.common.mpi_moments '
+                           'import _helper_runningmeanstd; _helper_runningmeanstd()'])

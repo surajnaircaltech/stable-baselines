@@ -14,6 +14,16 @@ and its extensions (Double-DQN, Dueling-DQN, Prioritized Experience Replay).
   The DQN model does not support ``stable_baselines.common.policies``,
   as a result it must use its own policy models (see :ref:`deepq_policies`).
 
+.. rubric:: Available Policies
+
+.. autosummary::
+    :nosignatures:
+
+    MlpPolicy
+    LnMlpPolicy
+    CnnPolicy
+    LnCnnPolicy
+
 Notes
 -----
 
@@ -23,7 +33,7 @@ Notes
 Can I use?
 ----------
 
--  Reccurent policies: ❌
+-  Recurrent policies: ❌
 -  Multi processing: ❌
 -  Gym spaces:
 
@@ -46,7 +56,7 @@ Example
   import gym
 
   from stable_baselines.common.vec_env import DummyVecEnv
-  from stable_baselines.deepq.policies import MlpPolicy, CnnPolicy
+  from stable_baselines.deepq.policies import MlpPolicy
   from stable_baselines import DQN
 
   env = gym.make('CartPole-v1')
@@ -83,7 +93,7 @@ With Atari:
 
   del model # remove to demonstrate saving and loading
 
-  DQN.load("deepq_breakout")
+  model = DQN.load("deepq_breakout")
 
   obs = env.reset()
   while True:
@@ -137,11 +147,11 @@ You can easily define a custom architecture for the policy network:
   from stable_baselines.common.vec_env import DummyVecEnv
   from stable_baselines import DQN
 
-  # Custom MLP policy of three layers of size 128 each
+  # Custom MLP policy of two layers of size 32 each
   class CustomPolicy(FeedForwardPolicy):
       def __init__(self, *args, **kwargs):
           super(CustomPolicy, self).__init__(*args, **kwargs,
-                                             layers=[128, 128, 128],
+                                             layers=[32, 32],
                                              layer_norm=False,
                                              feature_extraction="mlp")
 

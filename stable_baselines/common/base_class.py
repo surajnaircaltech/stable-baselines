@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 import os
 import glob
+import warnings
 
 import cloudpickle
 import numpy as np
@@ -25,7 +26,7 @@ class BaseRLModel(ABC):
     :param policy_base: (BasePolicy) the base policy used by this method
     """
 
-    def __init__(self, policy, env, verbose=0, *, requires_vec_env, policy_base):
+    def __init__(self, policy, env, verbose=0, *, requires_vec_env, policy_base, policy_kwargs=None):
         if isinstance(policy, str):
             self.policy = get_policy_from_name(policy_base, policy)
         else:
@@ -33,10 +34,15 @@ class BaseRLModel(ABC):
         self.env = env
         self.verbose = verbose
         self._requires_vec_env = requires_vec_env
+        self.policy_kwargs = {} if policy_kwargs is None else policy_kwargs
         self.observation_space = None
         self.action_space = None
         self.n_envs = None
         self._vectorize_action = False
+        self.num_timesteps = 0
+        self.graph = None
+        self.sess = None
+        self.params = None
 
         if env is not None:
             if isinstance(env, str):
@@ -113,6 +119,21 @@ class BaseRLModel(ABC):
 
         self.env = env
 
+    def _init_num_timesteps(self, reset_num_timesteps=True):
+        """
+        Initialize and resets num_timesteps (total timesteps since beginning of training)
+        if needed. Mainly used logging and plotting (tensorboard).
+
+        :param reset_num_timesteps: (bool) Set it to false when continuing training
+            to not create new plotting curves in tensorboard.
+        :return: (bool) Whether a new tensorboard log needs to be created
+        """
+        if reset_num_timesteps:
+            self.num_timesteps = 0
+
+        new_tb_log = self.num_timesteps == 0
+        return new_tb_log
+
     @abstractmethod
     def setup_model(self):
         """
@@ -133,16 +154,120 @@ class BaseRLModel(ABC):
             set_global_seeds(seed)
 
     @abstractmethod
-    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="run"):
+    def _get_pretrain_placeholders(self):
+        """
+        Return the placeholders needed for the pretraining:
+        - obs_ph: observation placeholder
+        - actions_ph will be population with an action from the environement
+            (from the expert dataset)
+        - deterministic_actions_ph: e.g., in the case of a gaussian policy,
+            the mean.
+
+        :return: ((tf.placeholder)) (obs_ph, actions_ph, deterministic_actions_ph)
+        """
+        pass
+
+    def pretrain(self, dataset, n_epochs=10, learning_rate=1e-4,
+                 adam_epsilon=1e-8, val_interval=None):
+        """
+        Pretrain a model using behavior cloning:
+        supervised learning given an expert dataset.
+
+        NOTE: only Box and Discrete spaces are supported for now.
+
+        :param dataset: (ExpertDataset) Dataset manager
+        :param n_epochs: (int) Number of iterations on the training set
+        :param learning_rate: (float) Learning rate
+        :param adam_epsilon: (float) the epsilon value for the adam optimizer
+        :param val_interval: (int) Report training and validation losses every n epochs.
+            By default, every 10th of the maximum number of epochs.
+        :return: (BaseRLModel) the pretrained model
+        """
+        continuous_actions = isinstance(self.action_space, gym.spaces.Box)
+        discrete_actions = isinstance(self.action_space, gym.spaces.Discrete)
+
+        assert discrete_actions or continuous_actions, 'Only Discrete and Box action spaces are supported'
+
+        # Validate the model every 10% of the total number of iteration
+        if val_interval is None:
+            # Prevent modulo by zero
+            if n_epochs < 10:
+                val_interval = 1
+            else:
+                val_interval = int(n_epochs / 10)
+
+        with self.graph.as_default():
+            with tf.variable_scope('pretrain'):
+                if continuous_actions:
+                    obs_ph, actions_ph, deterministic_actions_ph = self._get_pretrain_placeholders()
+                    loss = tf.reduce_mean(tf.square(actions_ph - deterministic_actions_ph))
+                else:
+                    obs_ph, actions_ph, actions_logits_ph = self._get_pretrain_placeholders()
+                    # actions_ph has a shape if (n_batch,), we reshape it to (n_batch, 1)
+                    # so no additional changes is needed in the dataloader
+                    actions_ph = tf.expand_dims(actions_ph, axis=1)
+                    one_hot_actions = tf.one_hot(actions_ph, self.action_space.n)
+                    loss = tf.nn.softmax_cross_entropy_with_logits_v2(
+                        logits=actions_logits_ph,
+                        labels=tf.stop_gradient(one_hot_actions)
+                    )
+                    loss = tf.reduce_mean(loss)
+                optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate, epsilon=adam_epsilon)
+                optim_op = optimizer.minimize(loss, var_list=self.params)
+
+            self.sess.run(tf.global_variables_initializer())
+
+        if self.verbose > 0:
+            print("Pretraining with Behavior Cloning...")
+
+        for epoch_idx in range(int(n_epochs)):
+            train_loss = 0.0
+            # Full pass on the training set
+            for _ in range(len(dataset.train_loader)):
+                expert_obs, expert_actions = dataset.get_next_batch('train')
+                feed_dict = {
+                    obs_ph: expert_obs,
+                    actions_ph: expert_actions,
+                }
+                train_loss_, _ = self.sess.run([loss, optim_op], feed_dict)
+                train_loss += train_loss_
+
+            train_loss /= len(dataset.train_loader)
+
+            if self.verbose > 0 and (epoch_idx + 1) % val_interval == 0:
+                val_loss = 0.0
+                # Full pass on the validation set
+                for _ in range(len(dataset.val_loader)):
+                    expert_obs, expert_actions = dataset.get_next_batch('val')
+                    val_loss_, = self.sess.run([loss], {obs_ph: expert_obs,
+                                                        actions_ph: expert_actions})
+                    val_loss += val_loss_
+
+                val_loss /= len(dataset.val_loader)
+                if self.verbose > 0:
+                    print("==== Training progress {:.2f}% ====".format(100 * (epoch_idx + 1) / n_epochs))
+                    print('Epoch {}'.format(epoch_idx + 1))
+                    print("Training loss: {:.6f}, Validation loss: {:.6f}".format(train_loss, val_loss))
+                    print()
+            # Free memory
+            del expert_obs, expert_actions
+        if self.verbose > 0:
+            print("Pretraining done.")
+        return self
+
+    @abstractmethod
+    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="run",
+              reset_num_timesteps=True):
         """
         Return a trained model.
 
         :param total_timesteps: (int) The total number of samples to train on
         :param seed: (int) The initial seed for training, if None: keep current seed
-        :param callback: (function (dict, dict)) function called at every steps with state of the algorithm.
-            It takes the local and global variables.
+        :param callback: (function (dict, dict)) -> boolean function called at every steps with state of the algorithm.
+            It takes the local and global variables. If it returns False, training is aborted.
         :param log_interval: (int) The number of timesteps before logging.
         :param tb_log_name: (str) the name of the run for tensorboard log
+        :param reset_num_timesteps: (bool) whether or not to reset the current timestep number (used in logging)
         :return: (BaseRLModel) the trained model
         """
         pass
@@ -161,14 +286,29 @@ class BaseRLModel(ABC):
         pass
 
     @abstractmethod
-    def action_probability(self, observation, state=None, mask=None):
+    def action_probability(self, observation, state=None, mask=None, actions=None):
         """
-        Get the model's action probability distribution from an observation
+        If ``actions`` is ``None``, then get the model's action probability distribution from a given observation
+
+        depending on the action space the output is:
+            - Discrete: probability for each possible action
+            - Box: mean and standard deviation of the action output
+
+        However if ``actions`` is not ``None``, this function will return the probability that the given actions are
+        taken with the given parameters (observation, state, ...) on this model.
+
+        .. warning::
+            When working with continuous probability distribution (e.g. Gaussian distribution for continuous action)
+            the probability of taking a particular action is exactly zero.
+            See http://blog.christianperone.com/2019/01/ for a good explanation
 
         :param observation: (np.ndarray) the input observation
         :param state: (np.ndarray) The last states (can be None, used in recurrent policies)
         :param mask: (np.ndarray) The last masks (can be None, used in recurrent policies)
-        :return: (np.ndarray) the model's action probability distribution
+        :param actions: (np.ndarray) (OPTIONAL) For calculating the likelihood that the given actions are chosen by
+            the model for each of the given parameters. Must have the same number of actions and observations.
+            (set to None to return the complete action probability distribution)
+        :return: (np.ndarray) the model's action probability
         """
         pass
 
@@ -177,7 +317,7 @@ class BaseRLModel(ABC):
         """
         Save the current parameters to file
 
-        :param save_path: (str) the save location
+        :param save_path: (str or file-like object) the save location
         """
         # self._save_to_file(save_path, data={}, params=None)
         raise NotImplementedError()
@@ -188,7 +328,7 @@ class BaseRLModel(ABC):
         """
         Load the model from file
 
-        :param load_path: (str) the saved parameter location
+        :param load_path: (str or file-like) the saved parameter location
         :param env: (Gym Envrionment) the new environment to run the loaded model on
             (can be None if you only need prediction from a trained model)
         :param kwargs: extra arguments to change the model when loading
@@ -198,23 +338,31 @@ class BaseRLModel(ABC):
 
     @staticmethod
     def _save_to_file(save_path, data=None, params=None):
-        _, ext = os.path.splitext(save_path)
-        if ext == "":
-            save_path += ".pkl"
+        if isinstance(save_path, str):
+            _, ext = os.path.splitext(save_path)
+            if ext == "":
+                save_path += ".pkl"
 
-        with open(save_path, "wb") as file:
-            cloudpickle.dump((data, params), file)
+            with open(save_path, "wb") as file_:
+                cloudpickle.dump((data, params), file_)
+        else:
+            # Here save_path is a file-like object, not a path
+            cloudpickle.dump((data, params), save_path)
 
     @staticmethod
     def _load_from_file(load_path):
-        if not os.path.exists(load_path):
-            if os.path.exists(load_path + ".pkl"):
-                load_path += ".pkl"
-            else:
-                raise ValueError("Error: the file {} could not be found".format(load_path))
+        if isinstance(load_path, str):
+            if not os.path.exists(load_path):
+                if os.path.exists(load_path + ".pkl"):
+                    load_path += ".pkl"
+                else:
+                    raise ValueError("Error: the file {} could not be found".format(load_path))
 
-        with open(load_path, "rb") as file:
-            data, params = cloudpickle.load(file)
+            with open(load_path, "rb") as file:
+                data, params = cloudpickle.load(file)
+        else:
+            # Here load_path is a file-like object, not a path
+            data, params = cloudpickle.load(load_path)
 
         return data, params
 
@@ -291,10 +439,11 @@ class ActorCriticRLModel(BaseRLModel):
     :param policy_base: (BasePolicy) the base policy used by this method (default=ActorCriticPolicy)
     :param requires_vec_env: (bool) Does this model require a vectorized environment
     """
+
     def __init__(self, policy, env, _init_setup_model, verbose=0, policy_base=ActorCriticPolicy,
-                 requires_vec_env=False):
+                 requires_vec_env=False, policy_kwargs=None):
         super(ActorCriticRLModel, self).__init__(policy, env, verbose=verbose, requires_vec_env=requires_vec_env,
-                                                 policy_base=policy_base)
+                                                 policy_base=policy_base, policy_kwargs=policy_kwargs)
 
         self.sess = None
         self.initial_state = None
@@ -307,7 +456,8 @@ class ActorCriticRLModel(BaseRLModel):
         pass
 
     @abstractmethod
-    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="run"):
+    def learn(self, total_timesteps, callback=None, seed=None,
+              log_interval=100, tb_log_name="run", reset_num_timesteps=True):
         pass
 
     def predict(self, observation, state=None, mask=None, deterministic=False):
@@ -321,14 +471,19 @@ class ActorCriticRLModel(BaseRLModel):
         observation = observation.reshape((-1,) + self.observation_space.shape)
         actions, _, states, _ = self.step(observation, state, mask, deterministic=deterministic)
 
+        clipped_actions = actions
+        # Clip the actions to avoid out of bound error
+        if isinstance(self.action_space, gym.spaces.Box):
+            clipped_actions = np.clip(actions, self.action_space.low, self.action_space.high)
+
         if not vectorized_env:
             if state is not None:
                 raise ValueError("Error: The environment must be vectorized when using recurrent policies.")
-            actions = actions[0]
+            clipped_actions = clipped_actions[0]
 
-        return actions, states
+        return clipped_actions, states
 
-    def action_probability(self, observation, state=None, mask=None):
+    def action_probability(self, observation, state=None, mask=None, actions=None):
         if state is None:
             state = self.initial_state
         if mask is None:
@@ -338,6 +493,46 @@ class ActorCriticRLModel(BaseRLModel):
 
         observation = observation.reshape((-1,) + self.observation_space.shape)
         actions_proba = self.proba_step(observation, state, mask)
+
+        if len(actions_proba) == 0:  # empty list means not implemented
+            warnings.warn("Warning: action probability is not implemented for {} action space. Returning None."
+                          .format(type(self.action_space).__name__))
+            return None
+
+        if actions is not None:  # comparing the action distribution, to given actions
+            actions = np.array([actions])
+            if isinstance(self.action_space, gym.spaces.Discrete):
+                actions = actions.reshape((-1,))
+                assert observation.shape[0] == actions.shape[0], \
+                    "Error: batch sizes differ for actions and observations."
+                actions_proba = actions_proba[np.arange(actions.shape[0]), actions]
+
+            elif isinstance(self.action_space, gym.spaces.MultiDiscrete):
+                actions = actions.reshape((-1, len(self.action_space.nvec)))
+                assert observation.shape[0] == actions.shape[0], \
+                    "Error: batch sizes differ for actions and observations."
+                # Discrete action probability, over multiple categories
+                actions = np.swapaxes(actions, 0, 1)  # swap axis for easier categorical split
+                actions_proba = np.prod([proba[np.arange(act.shape[0]), act]
+                                         for proba, act in zip(actions_proba, actions)], axis=0)
+
+            elif isinstance(self.action_space, gym.spaces.MultiBinary):
+                actions = actions.reshape((-1, self.action_space.n))
+                assert observation.shape[0] == actions.shape[0], \
+                    "Error: batch sizes differ for actions and observations."
+                # Bernoulli action probability, for every action
+                actions_proba = np.prod(actions_proba * actions + (1 - actions_proba) * (1 - actions), axis=1)
+
+            elif isinstance(self.action_space, gym.spaces.Box):
+                warnings.warn("The probabilty of taken a given action is exactly zero for a continuous distribution."
+                              "See http://blog.christianperone.com/2019/01/ for a good explanation")
+                actions_proba = np.zeros((observation.shape[0], 1), dtype=np.float32)
+            else:
+                warnings.warn("Warning: action_probability not implemented for {} actions space. Returning None."
+                              .format(type(self.action_space).__name__))
+                return None
+            # normalize action proba shape for the different gym spaces
+            actions_proba = actions_proba.reshape((-1, 1))
 
         if not vectorized_env:
             if state is not None:
@@ -353,6 +548,11 @@ class ActorCriticRLModel(BaseRLModel):
     @classmethod
     def load(cls, load_path, env=None, **kwargs):
         data, params = cls._load_from_file(load_path)
+
+        if 'policy_kwargs' in kwargs and kwargs['policy_kwargs'] != data['policy_kwargs']:
+            raise ValueError("The specified policy kwargs do not equal the stored policy kwargs. "
+                             "Stored kwargs: {}, specified kwargs: {}".format(data['policy_kwargs'],
+                                                                              kwargs['policy_kwargs']))
 
         model = cls(policy=data["policy"], env=None, _init_setup_model=False)
         model.__dict__.update(data)
@@ -381,9 +581,9 @@ class OffPolicyRLModel(BaseRLModel):
     :param policy_base: (BasePolicy) the base policy used by this method
     """
 
-    def __init__(self, policy, env, replay_buffer, verbose=0, *, requires_vec_env, policy_base):
+    def __init__(self, policy, env, replay_buffer, verbose=0, *, requires_vec_env, policy_base, policy_kwargs=None):
         super(OffPolicyRLModel, self).__init__(policy, env, verbose=verbose, requires_vec_env=requires_vec_env,
-                                               policy_base=policy_base)
+                                               policy_base=policy_base, policy_kwargs=policy_kwargs)
 
         self.replay_buffer = replay_buffer
 
@@ -392,7 +592,8 @@ class OffPolicyRLModel(BaseRLModel):
         pass
 
     @abstractmethod
-    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="run"):
+    def learn(self, total_timesteps, callback=None, seed=None,
+              log_interval=100, tb_log_name="run", reset_num_timesteps=True):
         pass
 
     @abstractmethod
@@ -400,7 +601,7 @@ class OffPolicyRLModel(BaseRLModel):
         pass
 
     @abstractmethod
-    def action_probability(self, observation, state=None, mask=None):
+    def action_probability(self, observation, state=None, mask=None, actions=None):
         pass
 
     @abstractmethod
@@ -468,23 +669,27 @@ class SetVerbosity:
 
 
 class TensorboardWriter:
-    def __init__(self, graph, tensorboard_log_path, tb_log_name):
+    def __init__(self, graph, tensorboard_log_path, tb_log_name, new_tb_log=True):
         """
         Create a Tensorboard writer for a code segment, and saves it to the log directory as its own run
 
         :param graph: (Tensorflow Graph) the model graph
         :param tensorboard_log_path: (str) the save path for the log (can be None for no logging)
         :param tb_log_name: (str) the name of the run for tensorboard log
+        :param new_tb_log: (bool) whether or not to create a new logging folder for tensorbaord
         """
         self.graph = graph
         self.tensorboard_log_path = tensorboard_log_path
         self.tb_log_name = tb_log_name
         self.writer = None
+        self.new_tb_log = new_tb_log
 
     def __enter__(self):
         if self.tensorboard_log_path is not None:
-            save_path = os.path.join(self.tensorboard_log_path,
-                                     "{}_{}".format(self.tb_log_name, self._get_latest_run_id() + 1))
+            latest_run_id = self._get_latest_run_id()
+            if self.new_tb_log:
+                latest_run_id = latest_run_id + 1
+            save_path = os.path.join(self.tensorboard_log_path, "{}_{}".format(self.tb_log_name, latest_run_id))
             self.writer = tf.summary.FileWriter(save_path, graph=self.graph)
         return self.writer
 

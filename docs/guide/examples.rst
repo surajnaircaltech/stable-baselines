@@ -54,6 +54,8 @@ In the following example, we will train, save and load an A2C model on the Lunar
   env = gym.make('LunarLander-v2')
   env = DummyVecEnv([lambda: env])
 
+  # Alternatively, you can directly use:
+  # model = A2C('MlpPolicy', 'LunarLander-v2', ent_coef=0.1, verbose=1)
   model = A2C(MlpPolicy, env, ent_coef=0.1, verbose=1)
   # Train the agent
   model.learn(total_timesteps=100000)
@@ -132,6 +134,7 @@ Using Callback: Monitoring Training
 You can define a custom callback function that will be called inside the agent.
 This could be useful when you want to monitor training, for instance display live
 learning curves in Tensorboard (or in Visdom) or save the best agent.
+If your callback returns False, training is aborted early.
 
 .. image:: ../_static/img/try_it.png
    :scale: 30 %
@@ -182,7 +185,7 @@ learning curves in Tensorboard (or in Visdom) or save the best agent.
                 print("Saving new best model")
                 _locals['self'].save(log_dir + 'best_model.pkl')
     n_steps += 1
-    return False
+    return True
 
 
   # Create log dir
@@ -224,7 +227,6 @@ and multiprocessing for you.
 .. code-block:: python
 
   from stable_baselines.common.cmd_util import make_atari_env
-  from stable_baselines.common.policies import CnnPolicy
   from stable_baselines.common.vec_env import VecFrameStack
   from stable_baselines import ACER
 
@@ -235,7 +237,7 @@ and multiprocessing for you.
   # Frame-stacking with 4 frames
   env = VecFrameStack(env, n_stack=4)
 
-  model = ACER(CnnPolicy, env, verbose=1)
+  model = ACER('CnnPolicy', env, verbose=1)
   model.learn(total_timesteps=25000)
 
   obs = env.reset()
@@ -299,16 +301,53 @@ However, you can also easily define a custom architecture for the policy network
   class CustomPolicy(FeedForwardPolicy):
       def __init__(self, *args, **kwargs):
           super(CustomPolicy, self).__init__(*args, **kwargs,
-                                             layers=[128, 128, 128],
+                                             net_arch=[dict(pi=[128, 128, 128], vf=[128, 128, 128])],
                                              feature_extraction="mlp")
 
-  # Create and wrap the environment
-  env = gym.make('LunarLander-v2')
-  env = DummyVecEnv([lambda: env])
-
-  model = A2C(CustomPolicy, env, verbose=1)
+  model = A2C(CustomPolicy, 'LunarLander-v2', verbose=1)
   # Train the agent
   model.learn(total_timesteps=100000)
+
+
+Recurrent Policies
+------------------
+
+This example demonstrate how to train a recurrent policy and how to test it properly.
+
+.. warning::
+
+  One current limitation of recurrent policies is that you must test them
+  with the same number of environments they have been trained on.
+
+
+.. code-block:: python
+
+  from stable_baselines import PPO2
+
+  # For recurrent policies, with PPO2, the number of environments run in parallel
+  # should be a multiple of nminibatches.
+  model = PPO2('MlpLstmPolicy', 'CartPole-v1', nminibatches=1, verbose=1)
+  model.learn(50000)
+
+  # Retrieve the env
+  env = model.get_env()
+
+  obs = env.reset()
+  # Passing state=None to the predict function means
+  # it is the initial state
+  state = None
+  # When using VecEnv, done is a vector
+  done = [False for _ in range(env.num_envs)]
+  for _ in range(1000):
+      # We need to pass the previous state and a mask for recurrent policies
+      # to reset lstm state when a new episode begin
+      action, state = model.predict(obs, state=state, mask=done)
+      obs, reward , done, _ = env.step(action)
+      # Note: with VecEnv, env.reset() is automatically called
+
+      # Show the env
+      env.render()
+
 
 
 Continual Learning
@@ -320,14 +359,13 @@ You can also move from learning on one environment to another for `continual lea
 .. code-block:: python
 
   from stable_baselines.common.cmd_util import make_atari_env
-  from stable_baselines.common.policies import CnnPolicy
   from stable_baselines import PPO2
 
   # There already exists an environment generator
   # that will make and wrap atari environments correctly
   env = make_atari_env('DemonAttackNoFrameskip-v4', num_env=8, seed=0)
 
-  model = PPO2(CnnPolicy, env, verbose=1)
+  model = PPO2('CnnPolicy', env, verbose=1)
   model.learn(total_timesteps=10000)
 
   obs = env.reset()
@@ -348,6 +386,40 @@ You can also move from learning on one environment to another for `continual lea
       action, _states = model.predict(obs)
       obs, rewards, dones, info = env.step(action)
       env.render()
+
+
+Record a Video
+--------------
+
+Record a mp4 video (here using a random agent).
+
+.. note::
+
+  It requires ffmpeg or avconv to be installed on the machine.
+
+.. code-block:: python
+
+  import gym
+  from stable_baselines.common.vec_env import VecVideoRecorder, DummyVecEnv
+
+  env_id = 'CartPole-v1'
+  video_folder = 'logs/videos/'
+  video_length = 100
+
+  env = DummyVecEnv([lambda: gym.make(env_id)])
+
+  obs = env.reset()
+
+  # Record the video starting at the first step
+  env = VecVideoRecorder(env, video_folder,
+                         record_video_trigger=lambda x: x == 0, video_length=video_length,
+                         name_prefix="random-agent-{}".format(env_id))
+
+  env.reset()
+  for _ in range(video_length + 1):
+    action = [env.action_space.sample()]
+    obs, _, _, _ = env.step(action)
+  env.close()
 
 
 Bonus: Make a GIF of a Trained Agent

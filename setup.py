@@ -1,11 +1,37 @@
-from setuptools import setup, find_packages
 import sys
-
-from stable_baselines import __version__
+import subprocess
+from setuptools import setup, find_packages
+from distutils.version import LooseVersion
 
 if sys.version_info.major != 3:
     print('This Python is only compatible with Python 3, but you are running '
           'Python {}. The installation will likely fail.'.format(sys.version_info.major))
+
+# Check tensorflow installation to avoid
+# breaking pre-installed tf gpu
+install_tf, tf_gpu = False, False
+try:
+    import tensorflow as tf
+    if tf.__version__ < LooseVersion('1.5.0'):
+        install_tf = True
+        # check if a gpu version is needed
+        tf_gpu = tf.test.is_gpu_available()
+except ImportError:
+    install_tf = True
+    # Check if a nvidia gpu is present
+    for command in ['nvidia-smi', '/usr/bin/nvidia-smi', 'nvidia-smi.exe']:
+        try:
+            if subprocess.call([command]) == 0:
+                tf_gpu = True
+                break
+        except IOError:  # command does not exist / is not executable
+            pass
+
+tf_dependency = []
+if install_tf:
+    tf_dependency = ['tensorflow-gpu>=1.5.0'] if tf_gpu else ['tensorflow>=1.5.0']
+    if tf_gpu:
+        print("A GPU was detected, tensorflow-gpu will be installed")
 
 
 long_description = """
@@ -35,6 +61,9 @@ https://medium.com/@araffin/df87c4b2fc82
 
 Documentation:
 https://stable-baselines.readthedocs.io/en/master/
+
+RL Baselines Zoo:
+https://github.com/araffin/rl-baselines-zoo
 
 ## Quick example
 
@@ -76,25 +105,35 @@ setup(name='stable_baselines',
       packages=[package for package in find_packages()
                 if package.startswith('stable_baselines')],
       install_requires=[
-          'gym[mujoco,atari,classic_control,robotics]',
+          'gym[atari,classic_control]>=0.10.9',
           'scipy',
           'tqdm',
           'joblib',
           'zmq',
           'dill',
-          'progressbar2',
           'mpi4py',
-          'cloudpickle',
-          'tensorflow>=1.5.0',
+          'cloudpickle>=0.5.5',
           'click',
           'opencv-python',
           'numpy',
           'pandas',
-          'pytest',
           'matplotlib',
           'seaborn',
           'glob2'
-      ],
+      ] + tf_dependency,
+      extras_require={
+        'tests': [
+            'pytest==3.5.1',
+            'pytest-cov',
+            'pytest-env',
+            'pytest-xdist',
+        ],
+        'docs': [
+            'sphinx',
+            'sphinx-autobuild',
+            'sphinx-rtd-theme'
+        ]
+      },
       description='A fork of OpenAI Baselines, implementations of reinforcement learning algorithms.',
       author='Ashley Hill',
       url='https://github.com/hill-a/stable-baselines',
@@ -104,7 +143,7 @@ setup(name='stable_baselines',
       license="MIT",
       long_description=long_description,
       long_description_content_type='text/markdown',
-      version=__version__,
+      version="2.5.1a0",
       )
 
 # python setup.py sdist

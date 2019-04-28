@@ -12,8 +12,9 @@ KFAC_DEBUG = False
 
 class KfacOptimizer:
     def __init__(self, learning_rate=0.01, momentum=0.9, clip_kl=0.01, kfac_update=2, stats_accum_iter=60,
-                 full_stats_init=False, cold_iter=100, cold_lr=None, async=False, async_stats=False, epsilon=1e-2,
-                 stats_decay=0.95, blockdiag_bias=False, channel_fac=False, factored_damping=False, approx_t2=False,
+                 full_stats_init=False, cold_iter=100, cold_lr=None, async_eigen_decomp=False,
+                 async_stats=False, epsilon=1e-2, stats_decay=0.95, blockdiag_bias=False,
+                 channel_fac=False, factored_damping=False, approx_t2=False,
                  use_float64=False, weight_decay_dict=None, max_grad_norm=0.5, verbose=1):
         """
         Kfac Optimizer for ACKTR models
@@ -27,7 +28,7 @@ class KfacOptimizer:
         :param full_stats_init: (bool) whether or not to fully initalize stats
         :param cold_iter: (int) Cold start learning rate for how many steps
         :param cold_lr: (float) Cold start learning rate
-        :param async: (bool) Use async eigen decomposition
+        :param async_eigen_decomp: (bool) Use async eigen decomposition
         :param async_stats: (bool) Asynchronous stats update
         :param epsilon: (float) epsilon value for small numbers
         :param stats_decay: (float) the stats decay rate
@@ -46,7 +47,7 @@ class KfacOptimizer:
         self._clip_kl = clip_kl
         self._channel_fac = channel_fac
         self._kfac_update = kfac_update
-        self._async = async
+        self._async_eigen_decomp = async_eigen_decomp
         self._async_stats = async_stats
         self._epsilon = epsilon
         self._stats_decay = stats_decay
@@ -114,7 +115,7 @@ class KfacOptimizer:
                 for grad in gradient.op.inputs:
                     factors.append(_search_factors(grad, graph))
                 op_names = [_item['opName'] for _item in factors]
-                if self.verbose >= 1:
+                if self.verbose > 1:
                     # TODO: need to check all the attribute of the ops as well
                     print(gradient.name)
                     print(op_names)
@@ -157,7 +158,8 @@ class KfacOptimizer:
                             if len(b_tensor.get_shape()) > 0 and b_tensor.get_shape()[0].value is None:
                                 b_tensor.set_shape(b_tensor_shape)
                             b_tensors.append(b_tensor)
-                    fprop_op_name = op_types.append('UNK-' + fprop_op.op_def.name)
+                    fprop_op_name = 'UNK-' + fprop_op.op_def.name
+                    op_types.append(fprop_op_name)
 
             return {'opName': fprop_op_name, 'op': fprop_op, 'fpropFactors': f_tensors, 'bpropFactors': b_tensors}
 
@@ -467,11 +469,11 @@ class KfacOptimizer:
 
                     # assume sampled loss is averaged. TODO:figure out better
                     # way to handle this
-                    bprop_factor *= tf.to_float(batch_size)
+                    bprop_factor *= tf.cast(batch_size, tf.float32)
                     ##
 
-                    cov_b = tf.matmul(
-                        bprop_factor, bprop_factor, transpose_a=True) / tf.to_float(tf.shape(bprop_factor)[0])
+                    cov_b = tf.matmul(bprop_factor, bprop_factor,
+                                      transpose_a=True) / tf.cast(tf.shape(bprop_factor)[0], tf.float32)
 
                     update_ops.append(cov_b)
                     stats_updates[stats_var] = cov_b
@@ -642,7 +644,7 @@ class KfacOptimizer:
         :return: ([TensorFlow Tensor]) update operations
         """
         update_ops = []
-        if self.verbose >= 1:
+        if self.verbose > 1:
             print(('updating %d eigenvalue/vectors' % len(eigen_list)))
         for _, (tensor, mark) in enumerate(zip(eigen_list, self.eigen_update_list)):
             stats_eigen_var = self.eigen_reverse_lookup[mark]
@@ -809,7 +811,7 @@ class KfacOptimizer:
 
                 grad_dict[var] = grad
 
-        if self.verbose >= 1:
+        if self.verbose > 1:
             print(('projecting %d gradient matrices' % counter))
 
         for grad_1, var in zip(gradlist, varlist):
@@ -817,7 +819,7 @@ class KfacOptimizer:
             # clipping
             if KFAC_DEBUG:
                 print(('apply clipping to %s' % var.name))
-            tf.Print(grad, [tf.sqrt(tf.reduce_sum(tf.pow(grad, 2)))], "Euclidean norm of new grad")
+                tf.Print(grad, [tf.sqrt(tf.reduce_sum(tf.pow(grad, 2)))], "Euclidean norm of new grad")
             local_vg = tf.reduce_sum(grad * grad_1 * (self._lr * self._lr))
             v_g += local_vg
 
@@ -866,9 +868,9 @@ class KfacOptimizer:
 
         queue_runner = None
         # launch eigen-decomp on a queue thread
-        if self._async:
-            if self.verbose >= 1:
-                print('Use async eigen decomp')
+        if self._async_eigen_decomp:
+            if self.verbose > 1:
+                print('Using async eigen decomposition')
             # get a list of factor loading tensors
             factor_ops_dummy = self.compute_stats_eigen()
 
@@ -895,14 +897,14 @@ class KfacOptimizer:
             assert self._update_stats_op is not None
             update_ops.append(self._update_stats_op)
             dependency_list = []
-            if not self._async:
+            if not self._async_eigen_decomp:
                 dependency_list.append(self._update_stats_op)
 
             with tf.control_dependencies(dependency_list):
                 def no_op_wrapper():
                     return tf.group(*[tf.assign_add(self.cold_step, 1)])
 
-                if not self._async:
+                if not self._async_eigen_decomp:
                     # synchronous eigen-decomp updates
                     update_factor_ops = tf.cond(tf.logical_and(tf.equal(tf.mod(self.stats_step, self._kfac_update),
                                                                         tf.convert_to_tensor(0)),

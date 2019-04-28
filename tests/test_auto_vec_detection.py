@@ -1,7 +1,7 @@
 import pytest
 import numpy as np
 
-from stable_baselines import A2C, ACER, ACKTR, DDPG, DQN, PPO1, PPO2, TRPO
+from stable_baselines import A2C, ACER, ACKTR, DDPG, DQN, PPO1, PPO2, SAC, TRPO
 from stable_baselines.common.vec_env import DummyVecEnv
 from stable_baselines.common.identity_env import IdentityEnv, IdentityEnvBox, IdentityEnvMultiBinary, \
     IdentityEnvMultiDiscrete
@@ -29,11 +29,11 @@ def test_identity(model_class):
             obs, _, _, _ = env.step(action)
 
     # Free memory
-    del model, env
+    del model, env0, env1
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("model_class", [A2C, DDPG, PPO1, PPO2, TRPO])
+@pytest.mark.parametrize("model_class", [A2C, DDPG, PPO1, PPO2, SAC, TRPO])
 def test_identity_box(model_class):
     """
     test the Box environment vectorisation detection
@@ -54,7 +54,7 @@ def test_identity_box(model_class):
             obs, _, _, _ = env.step(action)
 
     # Free memory
-    del model, env
+    del model, env0, env1
 
 
 @pytest.mark.slow
@@ -79,7 +79,7 @@ def test_identity_multi_binary(model_class):
             obs, _, _, _ = env.step(action)
 
     # Free memory
-    del model, env
+    del model, env0, env1
 
 
 @pytest.mark.slow
@@ -104,4 +104,4 @@ def test_identity_multi_discrete(model_class):
             obs, _, _, _ = env.step(action)
 
     # Free memory
-    del model, env
+    del model, env0, env1

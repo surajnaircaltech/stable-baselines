@@ -80,6 +80,9 @@ class HER(BaseRLModel):
         if _init_setup_model:
             self.setup_model()
 
+    def _get_pretrain_placeholders(self):
+        raise NotImplementedError()
+
     def setup_model(self):
         with SetVerbosity(self.verbose):
 
@@ -93,7 +96,8 @@ class HER(BaseRLModel):
             with self.graph.as_default():
                 pass
 
-    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="HER"):
+    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="HER",
+              reset_num_timesteps=True):
         with SetVerbosity(self.verbose):
             self._setup_learn(seed)
 
@@ -102,7 +106,7 @@ class HER(BaseRLModel):
     def predict(self, observation, state=None, mask=None, deterministic=False):
         pass
 
-    def action_probability(self, observation, state=None, mask=None):
+    def action_probability(self, observation, state=None, mask=None, actions=None):
         pass
 
     def save(self, save_path):

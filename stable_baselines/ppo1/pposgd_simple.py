@@ -1,6 +1,7 @@
 from collections import deque
 import time
 
+import gym
 import tensorflow as tf
 import numpy as np
 from mpi4py import MPI
@@ -37,14 +38,18 @@ class PPO1(ActorCriticRLModel):
     :param verbose: (int) the verbosity level: 0 none, 1 training information, 2 tensorflow debug
     :param tensorboard_log: (str) the log location for tensorboard (if None, no logging)
     :param _init_setup_model: (bool) Whether or not to build the network at the creation of the instance
+    :param policy_kwargs: (dict) additional arguments to be passed to the policy on creation
+    :param full_tensorboard_log: (bool) enable additional logging when using tensorboard
+        WARNING: this logging can take a lot of space quickly
     """
 
     def __init__(self, policy, env, gamma=0.99, timesteps_per_actorbatch=256, clip_param=0.2, entcoeff=0.01,
                  optim_epochs=4, optim_stepsize=1e-3, optim_batchsize=64, lam=0.95, adam_epsilon=1e-5,
-                 schedule='linear', verbose=0, tensorboard_log=None, _init_setup_model=True):
+                 schedule='linear', verbose=0, tensorboard_log=None,
+                 _init_setup_model=True, policy_kwargs=None, full_tensorboard_log=False):
 
         super().__init__(policy=policy, env=env, verbose=verbose, requires_vec_env=False,
-                         _init_setup_model=_init_setup_model)
+                         _init_setup_model=_init_setup_model, policy_kwargs=policy_kwargs)
 
         self.gamma = gamma
         self.timesteps_per_actorbatch = timesteps_per_actorbatch
@@ -57,6 +62,7 @@ class PPO1(ActorCriticRLModel):
         self.adam_epsilon = adam_epsilon
         self.schedule = schedule
         self.tensorboard_log = tensorboard_log
+        self.full_tensorboard_log = full_tensorboard_log
 
         self.graph = None
         self.sess = None
@@ -76,6 +82,13 @@ class PPO1(ActorCriticRLModel):
         if _init_setup_model:
             self.setup_model()
 
+    def _get_pretrain_placeholders(self):
+        policy = self.policy_pi
+        action_ph = policy.pdtype.sample_placeholder([None])
+        if isinstance(self.action_space, gym.spaces.Discrete):
+            return policy.obs_ph, action_ph, policy.policy
+        return policy.obs_ph, action_ph, policy.deterministic_action
+
     def setup_model(self):
         with SetVerbosity(self.verbose):
 
@@ -85,12 +98,12 @@ class PPO1(ActorCriticRLModel):
 
                 # Construct network for new policy
                 self.policy_pi = self.policy(self.sess, self.observation_space, self.action_space, self.n_envs, 1,
-                                             None, reuse=False)
+                                             None, reuse=False, **self.policy_kwargs)
 
                 # Network for old policy
                 with tf.variable_scope("oldpi", reuse=False):
                     old_pi = self.policy(self.sess, self.observation_space, self.action_space, self.n_envs, 1,
-                                         None, reuse=False)
+                                         None, reuse=False, **self.policy_kwargs)
 
                 with tf.variable_scope("loss", reuse=False):
                     # Target advantage function (if applicable)
@@ -147,17 +160,19 @@ class PPO1(ActorCriticRLModel):
 
                 with tf.variable_scope("input_info", reuse=False):
                     tf.summary.scalar('discounted_rewards', tf.reduce_mean(ret))
-                    tf.summary.histogram('discounted_rewards', ret)
                     tf.summary.scalar('learning_rate', tf.reduce_mean(self.optim_stepsize))
-                    tf.summary.histogram('learning_rate', self.optim_stepsize)
                     tf.summary.scalar('advantage', tf.reduce_mean(atarg))
-                    tf.summary.histogram('advantage', atarg)
                     tf.summary.scalar('clip_range', tf.reduce_mean(self.clip_param))
-                    tf.summary.histogram('clip_range', self.clip_param)
-                    if len(self.observation_space.shape) == 3:
-                        tf.summary.image('observation', obs_ph)
-                    else:
-                        tf.summary.histogram('observation', obs_ph)
+
+                    if self.full_tensorboard_log:
+                        tf.summary.histogram('discounted_rewards', ret)
+                        tf.summary.histogram('learning_rate', self.optim_stepsize)
+                        tf.summary.histogram('advantage', atarg)
+                        tf.summary.histogram('clip_range', self.clip_param)
+                        if tf_util.is_image(self.observation_space):
+                            tf.summary.image('observation', obs_ph)
+                        else:
+                            tf.summary.histogram('observation', obs_ph)
 
                 self.step = self.policy_pi.step
                 self.proba_step = self.policy_pi.proba_step
@@ -172,8 +187,13 @@ class PPO1(ActorCriticRLModel):
                 self.compute_losses = tf_util.function([obs_ph, old_pi.obs_ph, action_ph, atarg, ret, lrmult],
                                                        losses)
 
-    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="PPO1"):
-        with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name) as writer:
+    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="PPO1",
+              reset_num_timesteps=True):
+
+        new_tb_log = self._init_num_timesteps(reset_num_timesteps)
+
+        with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name, new_tb_log) \
+                as writer:
             self._setup_learn(seed)
 
             assert issubclass(self.policy, ActorCriticPolicy), "Error: the input policy for the PPO1 model must be " \
@@ -198,8 +218,11 @@ class PPO1(ActorCriticRLModel):
                 self.episode_reward = np.zeros((self.n_envs,))
 
                 while True:
-                    if callback:
-                        callback(locals(), globals())
+                    if callback is not None:
+                        # Only stop training if return value is False, not when it is None. This is for backwards
+                        # compatibility with callbacks that have no return statement.
+                        if callback(locals(), globals()) is False:
+                            break
                     if total_timesteps and timesteps_so_far >= total_timesteps:
                         break
 
@@ -223,7 +246,7 @@ class PPO1(ActorCriticRLModel):
                         self.episode_reward = total_episode_reward_logger(self.episode_reward,
                                                                           seg["true_rew"].reshape((self.n_envs, -1)),
                                                                           seg["dones"].reshape((self.n_envs, -1)),
-                                                                          writer, timesteps_so_far)
+                                                                          writer, self.num_timesteps)
 
                     # predicted value function before udpate
                     vpredbefore = seg["vpred"]
@@ -244,13 +267,13 @@ class PPO1(ActorCriticRLModel):
                         # list of tuples, each of which gives the loss for a minibatch
                         losses = []
                         for i, batch in enumerate(dataset.iterate_once(optim_batchsize)):
-                            steps = (timesteps_so_far +
+                            steps = (self.num_timesteps +
                                      k * optim_batchsize +
                                      int(i * (optim_batchsize / len(dataset.data_map))))
                             if writer is not None:
                                 # run loss backprop with summary, but once every 10 runs save the metadata
                                 # (memory, compute time, ...)
-                                if (1 + k) % 10 == 0:
+                                if self.full_tensorboard_log and (1 + k) % 10 == 0:
                                     run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
                                     run_metadata = tf.RunMetadata()
                                     summary, grad, *newlosses = self.lossandgrad(batch["ob"], batch["ob"], batch["ac"],
@@ -293,14 +316,17 @@ class PPO1(ActorCriticRLModel):
                     lens, rews = map(flatten_lists, zip(*listoflrpairs))
                     lenbuffer.extend(lens)
                     rewbuffer.extend(rews)
-                    logger.record_tabular("EpLenMean", np.mean(lenbuffer))
-                    logger.record_tabular("EpRewMean", np.mean(rewbuffer))
+                    if len(lenbuffer) > 0:
+                        logger.record_tabular("EpLenMean", np.mean(lenbuffer))
+                        logger.record_tabular("EpRewMean", np.mean(rewbuffer))
                     logger.record_tabular("EpThisIter", len(lens))
                     episodes_so_far += len(lens)
-                    timesteps_so_far += seg["total_timestep"]
+                    current_it_timesteps = MPI.COMM_WORLD.allreduce(seg["total_timestep"])
+                    timesteps_so_far += current_it_timesteps
+                    self.num_timesteps += current_it_timesteps
                     iters_so_far += 1
                     logger.record_tabular("EpisodesSoFar", episodes_so_far)
-                    logger.record_tabular("TimestepsSoFar", timesteps_so_far)
+                    logger.record_tabular("TimestepsSoFar", self.num_timesteps)
                     logger.record_tabular("TimeElapsed", time.time() - t_start)
                     if self.verbose >= 1 and MPI.COMM_WORLD.Get_rank() == 0:
                         logger.dump_tabular()
@@ -324,7 +350,8 @@ class PPO1(ActorCriticRLModel):
             "observation_space": self.observation_space,
             "action_space": self.action_space,
             "n_envs": self.n_envs,
-            "_vectorize_action": self._vectorize_action
+            "_vectorize_action": self._vectorize_action,
+            "policy_kwargs": self.policy_kwargs
         }
 
         params = self.sess.run(self.params)

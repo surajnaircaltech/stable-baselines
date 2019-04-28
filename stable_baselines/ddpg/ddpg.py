@@ -3,6 +3,7 @@ import os
 import time
 from collections import deque
 import pickle
+import warnings
 
 import gym
 import numpy as np
@@ -138,7 +139,7 @@ class DDPG(OffPolicyRLModel):
 
     :param policy: (DDPGPolicy or str) The policy model to use (MlpPolicy, CnnPolicy, LnMlpPolicy, ...)
     :param env: (Gym environment or str) The environment to learn from (if registered in Gym, can be str)
-    :param gamma: (float) the discount rate
+    :param gamma: (float) the discount factor
     :param memory_policy: (Memory) the replay buffer (if None, default to baselines.ddpg.memory.Memory)
     :param eval_env: (Gym Environment) the evaluation environment (can be None)
     :param nb_train_steps: (int) the number of training steps
@@ -166,6 +167,9 @@ class DDPG(OffPolicyRLModel):
     :param verbose: (int) the verbosity level: 0 none, 1 training information, 2 tensorflow debug
     :param tensorboard_log: (str) the log location for tensorboard (if None, no logging)
     :param _init_setup_model: (bool) Whether or not to build the network at the creation of the instance
+    :param policy_kwargs: (dict) additional arguments to be passed to the policy on creation
+    :param full_tensorboard_log: (bool) enable additional logging when using tensorboard
+        WARNING: this logging can take a lot of space quickly
     """
 
     def __init__(self, policy, env, gamma=0.99, memory_policy=None, eval_env=None, nb_train_steps=50,
@@ -173,12 +177,12 @@ class DDPG(OffPolicyRLModel):
                  normalize_observations=False, tau=0.001, batch_size=128, param_noise_adaption_interval=50,
                  normalize_returns=False, enable_popart=False, observation_range=(-5., 5.), critic_l2_reg=0.,
                  return_range=(-np.inf, np.inf), actor_lr=1e-4, critic_lr=1e-3, clip_norm=None, reward_scale=1.,
-                 render=False, render_eval=False, memory_limit=100, verbose=0, tensorboard_log=None,
-                 _init_setup_model=True):
+                 render=False, render_eval=False, memory_limit=50000, verbose=0, tensorboard_log=None,
+                 _init_setup_model=True, policy_kwargs=None, full_tensorboard_log=False):
 
         # TODO: replay_buffer refactoring
         super(DDPG, self).__init__(policy=policy, env=env, replay_buffer=None, verbose=verbose, policy_base=DDPGPolicy,
-                                   requires_vec_env=False)
+                                   requires_vec_env=False, policy_kwargs=policy_kwargs)
 
         # Parameters.
         self.gamma = gamma
@@ -206,6 +210,7 @@ class DDPG(OffPolicyRLModel):
         self.nb_rollout_steps = nb_rollout_steps
         self.memory_limit = memory_limit
         self.tensorboard_log = tensorboard_log
+        self.full_tensorboard_log = full_tensorboard_log
 
         # init
         self.graph = None
@@ -259,8 +264,16 @@ class DDPG(OffPolicyRLModel):
         self.episode_reward = None
         self.tb_seen_steps = None
 
+        self.target_params = None
+
         if _init_setup_model:
             self.setup_model()
+
+    def _get_pretrain_placeholders(self):
+        policy = self.policy_tf
+        # Rescale
+        deterministic_action = self.actor_tf * np.abs(self.action_space.low)
+        return policy.obs_ph, self.actions, deterministic_action
 
     def setup_model(self):
         with SetVerbosity(self.verbose):
@@ -292,28 +305,31 @@ class DDPG(OffPolicyRLModel):
                     else:
                         self.ret_rms = None
 
-                    self.policy_tf = self.policy(self.sess, self.observation_space, self.action_space, 1, 1, None)
+                    self.policy_tf = self.policy(self.sess, self.observation_space, self.action_space, 1, 1, None,
+                                                 **self.policy_kwargs)
 
                     # Create target networks.
-                    self.target_policy = self.policy(self.sess, self.observation_space, self.action_space, 1, 1, None)
+                    self.target_policy = self.policy(self.sess, self.observation_space, self.action_space, 1, 1, None,
+                                                     **self.policy_kwargs)
                     self.obs_target = self.target_policy.obs_ph
                     self.action_target = self.target_policy.action_ph
 
-                    normalized_obs0 = tf.clip_by_value(normalize(self.policy_tf.processed_x, self.obs_rms),
+                    normalized_obs0 = tf.clip_by_value(normalize(self.policy_tf.processed_obs, self.obs_rms),
                                                        self.observation_range[0], self.observation_range[1])
-                    normalized_obs1 = tf.clip_by_value(normalize(self.target_policy.processed_x, self.obs_rms),
+                    normalized_obs1 = tf.clip_by_value(normalize(self.target_policy.processed_obs, self.obs_rms),
                                                        self.observation_range[0], self.observation_range[1])
 
                     if self.param_noise is not None:
                         # Configure perturbed actor.
                         self.param_noise_actor = self.policy(self.sess, self.observation_space, self.action_space, 1, 1,
-                                                             None)
+                                                             None, **self.policy_kwargs)
                         self.obs_noise = self.param_noise_actor.obs_ph
                         self.action_noise_ph = self.param_noise_actor.action_ph
 
                         # Configure separate copy for stddev adoption.
                         self.adaptive_param_noise_actor = self.policy(self.sess, self.observation_space,
-                                                                      self.action_space, 1, 1, None)
+                                                                      self.action_space, 1, 1, None,
+                                                                      **self.policy_kwargs)
                         self.obs_adapt_noise = self.adaptive_param_noise_actor.obs_ph
                         self.action_adapt_noise = self.adaptive_param_noise_actor.action_ph
 
@@ -355,7 +371,8 @@ class DDPG(OffPolicyRLModel):
                     self.target_q = self.rewards + (1. - self.terminals1) * self.gamma * q_obs1
 
                     tf.summary.scalar('critic_target', tf.reduce_mean(self.critic_target))
-                    tf.summary.histogram('critic_target', self.critic_target)
+                    if self.full_tensorboard_log:
+                        tf.summary.histogram('critic_target', self.critic_target)
 
                     # Set up parts.
                     if self.normalize_returns and self.enable_popart:
@@ -365,13 +382,15 @@ class DDPG(OffPolicyRLModel):
 
                 with tf.variable_scope("input_info", reuse=False):
                     tf.summary.scalar('rewards', tf.reduce_mean(self.rewards))
-                    tf.summary.histogram('rewards', self.rewards)
                     tf.summary.scalar('param_noise_stddev', tf.reduce_mean(self.param_noise_stddev))
-                    tf.summary.histogram('param_noise_stddev', self.param_noise_stddev)
-                    if len(self.observation_space.shape) == 3 and self.observation_space.shape[0] in [1, 3, 4]:
-                        tf.summary.image('observation', self.obs_train)
-                    else:
-                        tf.summary.histogram('observation', self.obs_train)
+
+                    if self.full_tensorboard_log:
+                        tf.summary.histogram('rewards', self.rewards)
+                        tf.summary.histogram('param_noise_stddev', self.param_noise_stddev)
+                        if len(self.observation_space.shape) == 3 and self.observation_space.shape[0] in [1, 3, 4]:
+                            tf.summary.image('observation', self.obs_train)
+                        else:
+                            tf.summary.histogram('observation', self.obs_train)
 
                 with tf.variable_scope("Adam_mpi", reuse=False):
                     self._setup_actor_optimizer()
@@ -380,6 +399,11 @@ class DDPG(OffPolicyRLModel):
                     tf.summary.scalar('critic_loss', self.critic_loss)
 
                 self.params = find_trainable_variables("model")
+                self.target_params = find_trainable_variables("target")
+                self.obs_rms_params = [var for var in tf.global_variables()
+                                           if "obs_rms" in var.name]
+                self.ret_rms_params = [var for var in tf.global_variables()
+                                           if "ret_rms" in var.name]
 
                 with self.sess.as_default():
                     self._initialize(self.sess)
@@ -449,7 +473,7 @@ class DDPG(OffPolicyRLModel):
         self.critic_loss = tf.reduce_mean(tf.square(self.normalized_critic_tf - normalized_critic_target_tf))
         if self.critic_l2_reg > 0.:
             critic_reg_vars = [var for var in tf_util.get_trainable_vars('model/qf/')
-                               if 'bias' not in var.name and 'output' not in var.name and 'b' not in var.name]
+                               if 'bias' not in var.name and 'qf_output' not in var.name and 'b' not in var.name]
             if self.verbose >= 2:
                 for var in critic_reg_vars:
                     logger.info('  regularizing: {}'.format(var.name))
@@ -482,8 +506,8 @@ class DDPG(OffPolicyRLModel):
         new_mean = self.ret_rms.mean
 
         self.renormalize_q_outputs_op = []
-        for out_vars in [[var for var in tf_util.get_trainable_vars('model/qf/') if 'output' in var.name],
-                         [var for var in tf_util.get_trainable_vars('target/qf/') if 'output' in var.name]]:
+        for out_vars in [[var for var in tf_util.get_trainable_vars('model/qf/') if 'qf_output' in var.name],
+                         [var for var in tf_util.get_trainable_vars('target/qf/') if 'qf_output' in var.name]]:
             assert len(out_vars) == 2
             # wieght and bias of the last layer
             weight, bias = out_vars
@@ -624,7 +648,7 @@ class DDPG(OffPolicyRLModel):
         if writer is not None:
             # run loss backprop with summary if the step_id was not already logged (can happen with the right
             # parameters as the step value is only an estimate)
-            if log and step not in self.tb_seen_steps:
+            if self.full_tensorboard_log and log and step not in self.tb_seen_steps:
                 run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
                 run_metadata = tf.RunMetadata()
                 summary, actor_grads, actor_loss, critic_grads, critic_loss = \
@@ -730,8 +754,13 @@ class DDPG(OffPolicyRLModel):
                 self.param_noise_stddev: self.param_noise.current_stddev,
             })
 
-    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="DDPG"):
-        with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name) as writer:
+    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="DDPG",
+              reset_num_timesteps=True):
+
+        new_tb_log = self._init_num_timesteps(reset_num_timesteps)
+
+        with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name, new_tb_log) \
+                as writer:
             self._setup_learn(seed)
 
             # a list for tensorboard logging, to prevent logging with the same step number, if it already occured
@@ -793,9 +822,10 @@ class DDPG(OffPolicyRLModel):
                                 ep_rew = np.array([reward]).reshape((1, -1))
                                 ep_done = np.array([done]).reshape((1, -1))
                                 self.episode_reward = total_episode_reward_logger(self.episode_reward, ep_rew, ep_done,
-                                                                                  writer, total_steps)
+                                                                                  writer, self.num_timesteps)
                             step += 1
                             total_steps += 1
+                            self.num_timesteps += 1
                             if rank == 0 and self.render:
                                 self.env.render()
                             episode_reward += reward
@@ -807,7 +837,10 @@ class DDPG(OffPolicyRLModel):
                             self._store_transition(obs, action, reward, new_obs, done)
                             obs = new_obs
                             if callback is not None:
-                                callback(locals(), globals())
+                                # Only stop training if return value is False, not when it is None.
+                                # This is for backwards compatibility with callbacks that have no return statement.
+                                if callback(locals(), globals()) is False:
+                                    return self
 
                             if done:
                                 # Episode done.
@@ -837,7 +870,7 @@ class DDPG(OffPolicyRLModel):
                             # weird equation to deal with the fact the nb_train_steps will be different
                             # to nb_rollout_steps
                             step = (int(t_train * (self.nb_rollout_steps / self.nb_train_steps)) +
-                                    total_steps - self.nb_rollout_steps)
+                                    self.num_timesteps - self.nb_rollout_steps)
 
                             critic_loss, actor_loss = self._train_step(step, writer, log=t_train == 0)
                             epoch_critic_losses.append(critic_loss)
@@ -890,9 +923,9 @@ class DDPG(OffPolicyRLModel):
                     combined_stats['rollout/actions_std'] = np.std(epoch_actions)
                     # Evaluation statistics.
                     if self.eval_env is not None:
-                        combined_stats['eval/return'] = eval_episode_rewards
+                        combined_stats['eval/return'] = np.mean(eval_episode_rewards)
                         combined_stats['eval/return_history'] = np.mean(eval_episode_rewards_history)
-                        combined_stats['eval/Q'] = eval_qs
+                        combined_stats['eval/Q'] = np.mean(eval_qs)
                         combined_stats['eval/episodes'] = len(eval_episode_rewards)
 
                     def as_scalar(scalar):
@@ -945,17 +978,15 @@ class DDPG(OffPolicyRLModel):
 
         return actions, None
 
-    def action_probability(self, observation, state=None, mask=None):
+    def action_probability(self, observation, state=None, mask=None, actions=None):
         observation = np.array(observation)
-        vectorized_env = self._is_vectorized_observation(observation, self.observation_space)
 
-        observation = observation.reshape((-1,) + self.observation_space.shape)
+        if actions is not None:
+            raise ValueError("Error: DDPG does not have action probabilities.")
 
-        # here there are no action probabilities, as DDPG is continuous
-        if vectorized_env:
-            return self.sess.run(self.policy_tf.policy_proba, feed_dict={self.obs_train: observation})
-        else:
-            return self.sess.run(self.policy_tf.policy_proba, feed_dict={self.obs_train: observation})[0]
+        # here there are no action probabilities, as DDPG does not use a probability distribution
+        warnings.warn("Warning: action probability is meaningless for DDPG. Returning None")
+        return None
 
     def save(self, save_path):
         data = {
@@ -985,16 +1016,32 @@ class DDPG(OffPolicyRLModel):
             "policy": self.policy,
             "memory_policy": self.memory_policy,
             "n_envs": self.n_envs,
-            "_vectorize_action": self._vectorize_action
+            "_vectorize_action": self._vectorize_action,
+            "policy_kwargs": self.policy_kwargs
         }
 
         params = self.sess.run(self.params)
+        target_params = self.sess.run(self.target_params)
+        norm_obs_params = self.sess.run(self.obs_rms_params)
+        norm_ret_params = self.sess.run(self.ret_rms_params)
 
-        self._save_to_file(save_path, data=data, params=params)
+        params_to_save = params \
+            + target_params \
+            + norm_obs_params \
+            + norm_ret_params
+        self._save_to_file(save_path,
+                           data=data,
+                           params=params_to_save)
+
 
     @classmethod
     def load(cls, load_path, env=None, **kwargs):
         data, params = cls._load_from_file(load_path)
+
+        if 'policy_kwargs' in kwargs and kwargs['policy_kwargs'] != data['policy_kwargs']:
+            raise ValueError("The specified policy kwargs do not equal the stored policy kwargs. "
+                             "Stored kwargs: {}, specified kwargs: {}".format(data['policy_kwargs'],
+                                                                              kwargs['policy_kwargs']))
 
         model = cls(None, env, _init_setup_model=False)
         model.__dict__.update(data)
@@ -1003,7 +1050,11 @@ class DDPG(OffPolicyRLModel):
         model.setup_model()
 
         restores = []
-        for param, loaded_p in zip(model.params, params):
+        params_to_load = model.params \
+            + model.target_params \
+            + model.obs_rms_params \
+            + model.ret_rms_params
+        for param, loaded_p in zip(params_to_load, params):
             restores.append(param.assign(loaded_p))
         model.sess.run(restores)
 
